@@ -1,8 +1,10 @@
 import asyncio
 from tcputils import *
+from grader.tcputils import *
 
 
 class Servidor:
+
     def __init__(self, rede, porta):
         self.rede = rede
         self.porta = porta
@@ -34,9 +36,16 @@ class Servidor:
         if (flags & FLAGS_SYN) == FLAGS_SYN:
             # A flag SYN estar setada significa que é um cliente tentando estabelecer uma conexão nova
             # TODO: talvez você precise passar mais coisas para o construtor de conexão
-            conexao = self.conexoes[id_conexao] = Conexao(self, id_conexao)
+            conexao = self.conexoes[id_conexao] = Conexao(self, id_conexao, seq_no + 1)
             # TODO: você precisa fazer o handshake aceitando a conexão. Escolha se você acha melhor
             # fazer aqui mesmo ou dentro da classe Conexao.
+            conexao.seq_no = seq_no + 1
+            conexao.ack_no = seq_no + 1
+
+            header = make_header(dst_port, src_port, seq_no, seq_no+1, FLAGS_SYN | FLAGS_ACK)
+            checksum_certo = fix_checksum(header, dst_addr, src_addr)
+            self.rede.enviar(checksum_certo, src_addr)
+            
             if self.callback:
                 self.callback(conexao)
         elif id_conexao in self.conexoes:
@@ -46,9 +55,9 @@ class Servidor:
             print('%s:%d -> %s:%d (pacote associado a conexão desconhecida)' %
                   (src_addr, src_port, dst_addr, dst_port))
 
-
 class Conexao:
-    def __init__(self, servidor, id_conexao):
+    def __init__(self, servidor, id_conexao, seq):
+        self.seq = seq
         self.servidor = servidor
         self.id_conexao = id_conexao
         self.callback = None
@@ -63,7 +72,18 @@ class Conexao:
         # TODO: trate aqui o recebimento de segmentos provenientes da camada de rede.
         # Chame self.callback(self, dados) para passar dados para a camada de aplicação após
         # garantir que eles não sejam duplicados e que tenham sido recebidos em ordem.
-        print('recebido payload: %r' % payload)
+        if (seq_no != self.ack_no):
+            return
+        if len(payload) == 0:
+            return
+        self.ack_no += len(payload)
+
+        (src_addr, src_port, dst_addr, dst_port) = self.id_conexao#Pra que serve isso?
+        header = make_header(dst_port, src_port, self.seq_no, self.ack_no, FLAGS_ACK)
+        cheksum_certo = fix_checksum(header, dst_addr, src_addr)
+        self.servidor.rede.enviar(cheksum_certo, src_addr)
+        
+        self.callback(self, payload)
 
     # Os métodos abaixo fazem parte da API
 
@@ -81,7 +101,18 @@ class Conexao:
         # TODO: implemente aqui o envio de dados.
         # Chame self.servidor.rede.enviar(segmento, dest_addr) para enviar o segmento
         # que você construir para a camada de rede.
-        pass
+        #pass
+        ###Tem que botar um for por aqui, cansei!!
+        tam_dados = len(dados)
+        if tam_dados > MSS:
+            self.enviar(dados[:MSS])
+            self.enviar(dados[MSS:])
+        else:
+            (src_addr, src_port, dst_addr, dst_port) = self.id_conexao
+            header = make_header(dst_port, src_port, self.seq_no, self.ack_no, FLAGS_ACK)
+            cheksum_certo = fix_checksum(header + dados, dst_addr, src_addr)
+            self.servidor.rede.enviar(cheksum_certo, src_addr)
+            self.seq_no += tam_dados
 
     def fechar(self):
         """
